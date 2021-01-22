@@ -32,17 +32,17 @@ if (params.subsample){
 process subsample{
     tag "${pair_id}"
     conda "envs/seqtk.yaml"
-    storeDir "${params.subsample_depth}_subsampled_reads"
+    publishDir "${params.subsample_depth}_subsampled_reads"
 
     input:
     set pair_id, file(reads) from ch_subsample
 
     output:
-    tuple val(pair_id), file("*${pair_id}*_sub_${params.subsample_depth}*.fastq.gz") into ch_fastqc_pre_trim,ch_trimmomatic_input
+    tuple val("${pair_id}_sub_${params.subsample_depth}"), file("${pair_id}_sub_${params.subsample_depth}*.fastq.gz") into ch_fastqc_pre_trim,ch_trimmomatic_input
 
     script:
-	read_out_one = reads[0].getName().replaceAll(".fastq.gz", "_sub_${params.subsample_depth}.fastq.gz")
-    read_out_two = reads[1].getName().replaceAll(".fastq.gz", "_sub_${params.subsample_depth}.fastq.gz")
+	read_out_one = reads[0].getName().replaceAll("${pair_id}", "${pair_id}_sub_${params.subsample_depth}")
+    read_out_two = reads[1].getName().replaceAll("${pair_id}", "${pair_id}_sub_${params.subsample_depth}")
     
     """
     seqtk sample -s100 ${reads[0]} ${params.subsample_depth} | gzip > ${read_out_one}
@@ -50,53 +50,53 @@ process subsample{
     """
 }
 
-ch_fastqc_pre_trim.view()
 
-// process fastqc_pre_trim{
-//     tag "${fastq_file}"
-//     conda "envs/nf_general.yaml"
-//     publishDir "nf_fastqc_pre_trim"
+process fastqc_pre_trim{
+    tag "${fastq_file}"
+    conda "envs/fastqc.yaml"
+    publishDir "fastqc_pre_trim"
 
-//     input:
-//     file fastq_file from ch_fastqc_pre_trim.flatten()
+    input:
+    file fastq_file from ch_fastqc_pre_trim.map{it[1]}.flatten()
 
-//     output:
-//     file "*_fastqc.html" into ch_fastqc_pre_trim_output
+    output:
+    file "*_fastqc.html" into ch_fastqc_pre_trim_output
 
-//     script:
-//     """
-//     fastqc -o . $fastq_file
-//     """
-// }
+    script:
+    """
+    fastqc -o . $fastq_file
+    """
+}
 
-// /* 
-//     Trim reads with trimmomatic
-// */
-// process trimmomatic{
-//     cache 'lenient'
-// 	tag "${fastq_file_one}"
-//     conda "envs/nf_general.yaml"
-// 	storeDir "nf_trimmed"
 
-// 	input:
-// 	tuple file(fastq_file_one), file(fastq_file_two) from ch_trimmomatic_input
+
+/* 
+    Trim reads with trimmomatic
+*/
+process trimmomatic{
+    cache 'lenient'
+	tag "${pair_id}"
+    conda "envs/trimmomatic.yaml"
 	
-// 	output:
-// 	// Output that will be used for the error_correction
-// 	// This is a list of tuples that are the 1P and 2P output files only
-// 	tuple file("${fastq_file_one.getName().replaceAll('_1.fastq.gz', '')}*1P.fq.gz"), file("${fastq_file_one.getName().replaceAll('_1.fastq.gz', '')}*2P.fq.gz") into ch_rcorrect_input
+	input:
+	tuple val(pair_id), file(fastqs) from ch_trimmomatic_input
+	
+	output:
+	// Output that will be used for the error_correction
+	// This is a list of tuples that are the 1P and 2P output files only
+	tuple val(pair_id), file("${pair_id}*{1,2}P.fq.gz") into ch_rcorrect
 
-// 	script:
-// 	outbase = fastq_file_one.getName().replaceAll('_1.fastq.gz', '.trimmed.fq.gz')
-// 	"""
-// 	trimmomatic PE -threads ${params.trimmomatic_threads} -basein ${fastq_file_one} \\
-// 		-baseout $outbase \\
-// 		ILLUMINACLIP:${tru_seq_pe_fasta_path}:2:30:10:2:keepBothReads \\
-// 		LEADING:3 TRAILING:3 MINLEN:36 HEADCROP:11
-// 	"""
-// }
+	script:
+	outbase = fastqs[0].getName().replaceAll('_1.fastq.gz', '.trimmed.fq.gz')
+	"""
+	trimmomatic PE -threads ${params.trimmomatic_threads} -basein ${fastqs[0]} \\
+		-baseout $outbase \\
+		ILLUMINACLIP:${tru_seq_pe_fasta_path}:2:30:10:2:keepBothReads \\
+		LEADING:3 TRAILING:3 MINLEN:36 HEADCROP:11
+	"""
+}
 
-
+ch_rcorrect.view()
 
 // // Now error correction
 // process rcorrector{
