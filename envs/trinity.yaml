@@ -1,0 +1,6 @@
+name: trinity
+channels:
+  - bioconda
+dependencies:
+  - trinity
+  - bowtie

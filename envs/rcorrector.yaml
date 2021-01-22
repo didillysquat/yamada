@@ -1,0 +1,5 @@
+name: rcorrector
+channels:
+  - bioconda
+dependencies:
+  - rcorrector

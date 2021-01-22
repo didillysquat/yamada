@@ -2,3 +2,6 @@
 10000_subsampled_reads
 fastqc_pre_trim
 work
+.vscode
+outputs
+nf_trinity_assembly
