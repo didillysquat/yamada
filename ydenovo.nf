@@ -366,7 +366,7 @@ process trinity{
     tuple val(pair_id), file(fastqs) from ch_trinity.map{ key, files -> tuple( key[0..10], files ) }.groupTuple().map{key, files -> tuple(key, files[0] + files[1])}
 
     output:
-    tuple val(pair_id), file("${pair_id}.Trinity.fasta") into ch_trinity_stats,ch_busco,ch_assembly_bowtie_db,ch_rsem_assemblies
+    tuple val(pair_id), file("${pair_id}.Trinity.fasta") into ch_trinity_stats,ch_busco,ch_assembly_bowtie_db,ch_rsem_assemblies,ch_ExN50_assembly
     tuple val(pair_id), file("${pair_id}.gene_trans_map") into ch_abund_to_matrix_gene_map
 
     script:
@@ -446,14 +446,8 @@ process assembly_bowtie_db{
     """
 
 }
-// We will mix the two channels, collect them and then work within a map
-// We will look for the vals that are subsets of the other vals and create a map
-// of the val for the assemblies to the reads
-// At the same time we will create will create a map of the val to the reads
-// From this map we can then 
-// ch_bowtie2_mapping_stats_indexed_assembly.mix(ch_bowtie2_mapping_stats_reads).collect().flatMap{ items_list -> pair_read_to_assembly(items_list)}.view()
 
-// TODO here we need to reassociate each of the assemblies back to its original reads
+// Here we need to reassociate each of the assemblies back to its original reads
 // second, map the reads back to the bowtie2 indexed assembly db
 /* error produced
 Cannot execute null+/home/humebc/projects/20201217_yamada/nf_pipeline/outputs/trinity_assembly_sub_10000/NG-25417_DK.Trinity.fasta
@@ -531,6 +525,7 @@ process abund_to_matrix{
 
     output:
     tuple val(assembly_id), file("${assembly_id}.RSEM.isoform.counts.matrix"), file("${assembly_id}.RSEM.isoform.TPM.not_cross_norm"), file("${assembly_id}.RSEM.isoform.TMM.EXPR.matrix") into ch_abund_to_matrix_out_out
+    tuple val(assembly_id), file("${assembly_id}.RSEM.isoform.TMM.EXPR.matrix") into ch_ExN50_matrix
 
     script:
     """
@@ -541,3 +536,30 @@ process abund_to_matrix{
     """
 }
 
+// Now compute the ExN50 stats per
+// https://github.com/trinityrnaseq/trinityrnaseq/wiki/Transcriptome-Contig-Nx-and-ExN50-stats#contig-ex90n50-statistic-and-ex90-gene-count
+// ch_ExN50_matrix.join(ch_ExN50_assembly).view()
+process ExN50{
+    cache 'lenient'
+    tag "$assembly_id"
+    container 'trinityrnaseq/trinityrnaseq:latest'
+    containerOptions '-u $(id -u):$(id -g)'
+    publishDir expression_quantification_rsem_publish_dir
+
+    input:
+    tuple val(assembly_id), file(abund_matrix), file(assembly_fasta) from ch_ExN50_matrix.join(ch_ExN50_assembly)
+
+    output:
+    tuple file("*ExN50.stats*"), file("*RSEM.isoform.TMM.EXPR.matrix.E-inputs*") into ch_ExN50_out
+    
+    script:
+    """
+    /usr/local/bin/trinityrnaseq/util/misc/contig_ExN50_statistic.pl $abund_matrix $assembly_fasta | tee ExN50.stats
+    /usr/local/bin/trinityrnaseq/util/misc/plot_ExN50_statistic.Rscript  ExN50.stats
+    cat ${assembly_id}.RSEM.isoform.TMM.EXPR.matrix.E-inputs |  egrep -v ^\\# | awk '\$1 <= 90' | wc -l > Ex90N50.txt
+    mv ExN50_plot.pdf ${assembly_id}.ExN50_plot.pdf
+    mv ExN50.stats ${assembly_id}.ExN50.stats
+    mv Ex90N50.txt ${assembly_id}.Ex90N50.txt
+    """
+}
+//
