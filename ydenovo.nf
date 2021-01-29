@@ -56,6 +56,57 @@ params.busco_threads = 50
 params.bowtie2_threads = 50
 params.rsem_threads = 50
 
+// Util methods
+// Returns a tuple with three elements
+// 1 a list of 2 val items. 0 is the read sample_id, 1 is the assembly sample_id
+// 2 a list of 2 file items. The R1 and R2 reads in that order
+// 3 a list of the file items originally associated with the assembly sample_id
+// for the indexed assembly db this will be the db index objects in a list
+// for the assembly itself this will be the fasta assembly.
+def pair_read_to_assembly = { items_list ->
+        def return_list = []
+        // Map the val of the assembly objects to the val of the seq file objects
+        def assembly_val_to_file_val_map = [:]
+        for (i = 0; i <items_list.size(); i+=2) {
+            for (j = 0; j <items_list.size(); j+=2) {
+                if(items_list[j].startsWith(items_list[i]) && items_list[i] != items_list[j]){
+                    // Then items_list[i] is substring of items_list[j]
+                    // Then items_list[i] is assembly related to reads items_list[j]
+                    if(assembly_val_to_file_val_map.containsKey(items_list[i])){
+                        // Then we already have one of the reads mapped to items_list[i]
+                        // So add this second one to the list
+                        current_read_val_list = assembly_val_to_file_val_map.get(items_list[i])
+                        new_read_val_list = current_read_val_list + items_list[j]
+                        assembly_val_to_file_val_map[items_list[i]] = new_read_val_list
+                    }else{
+                        // Then we don't have either of the reads mapped to the assembly val yet
+                        assembly_val_to_file_val_map[items_list[i]] = [items_list[j]]
+                    }
+                }
+            }
+        }
+        
+        // Map each val object to its list of files
+        def val_to_files_list_map = [:]
+        for (i = 0; i <items_list.size(); i+=2) {
+            
+            val_to_files_list_map.put(items_list[i], items_list[i+1])
+        }
+
+        // Finally populate the return_list according to the mappings we have made
+        // We want the strucutre to be tuples (2 items) with a tuple for every read set.
+        // First item is the val of the read set
+        // Second item is a list containing the R1, R2, followed by assembly files in that order
+        assembly_val_to_file_val_map.each { assembly_key, read_val_list ->
+            read_val_list.each{read_name ->
+                def tup = tuple(read_name, val_to_files_list_map[read_name] + val_to_files_list_map[assembly_key])
+                return_list << tuple([read_name, assembly_key], val_to_files_list_map[read_name], val_to_files_list_map[assembly_key])
+            }
+        }
+        return return_list
+
+}
+
 /* 
 If subsample, create a channel that will pass into the subsampling process and then pass the subsampled
 files into the trimming and fastqc
@@ -398,52 +449,10 @@ process assembly_bowtie_db{
 // of the val for the assemblies to the reads
 // At the same time we will create will create a map of the val to the reads
 // From this map we can then 
-// ch_bowtie2_mapping_stats_indexed_assembly.mix(ch_bowtie2_mapping_stats_reads).collect().flatMap{ items_list ->
-//     def return_list = []
-//     // Map the val of the assembly objects to the val of the seq file objects
-//     def assembly_val_to_file_val_map = [:]
-//     for (i = 0; i <items_list.size(); i+=2) {
-//         for (j = 0; j <items_list.size(); j+=2) {
-//             if(items_list[j].startsWith(items_list[i]) && items_list[i] != items_list[j]){
-//                 // Then items_list[i] is substring of items_list[j]
-//                 // Then items_list[i] is assembly related to reads items_list[j]
-//                 if(assembly_val_to_file_val_map.containsKey(items_list[i])){
-//                     // Then we already have one of the reads mapped to items_list[i]
-//                     // So add this second one to the list
-//                     current_read_val_list = assembly_val_to_file_val_map.get(items_list[i])
-//                     new_read_val_list = current_read_val_list + items_list[j]
-//                     assembly_val_to_file_val_map[items_list[i]] = new_read_val_list
-//                 }else{
-//                     // Then we don't have either of the reads mapped to the assembly val yet
-//                     assembly_val_to_file_val_map[items_list[i]] = [items_list[j]]
-//                 }
-//             }
-//         }
-//     }
-    
-//     // Map each val object to its list of files
-//     def val_to_files_list_map = [:]
-//     for (i = 0; i <items_list.size(); i+=2) {
-        
-//         val_to_files_list_map.put(items_list[i], items_list[i+1])
-//     }
-
-//     // Finally populate the return_list according to the mappings we have made
-//     // We want the strucutre to be tuples (2 items) with a tuple for every read set.
-//     // First item is the val of the read set
-//     // Second item is a list containing the R1, R2, followed by assembly files in that order
-//     assembly_val_to_file_val_map.each { assembly_key, read_val_list ->
-//         read_val_list.each{read_name ->
-//             def tup = tuple(read_name, val_to_files_list_map[read_name] + val_to_files_list_map[assembly_key])
-//             return_list << tuple([read_name,assembly_key], val_to_files_list_map[read_name], val_to_files_list_map[assembly_key])
-//         }
-//     }
-//     return return_list
-
-// }.view()
+// ch_bowtie2_mapping_stats_indexed_assembly.mix(ch_bowtie2_mapping_stats_reads).collect().flatMap{ items_list -> pair_read_to_assembly(items_list)}.view()
 
 // TODO here we need to reassociate each of the assemblies back to its original reads
-// // second, map the reads back to the bowtie2 indexed assembly db
+// second, map the reads back to the bowtie2 indexed assembly db
 process bowtie2_mapping_stats_reads{
     cache 'lenient'
     tag "${pair_ids[0]}"
@@ -453,49 +462,7 @@ process bowtie2_mapping_stats_reads{
     containerOptions '-u $(id -u):$(id -g)'
 
     input:
-    tuple val(pair_ids), file(reads), file(assembly_db) from ch_bowtie2_mapping_stats_indexed_assembly.mix(ch_bowtie2_mapping_stats_reads).collect().flatMap{ items_list ->
-    def return_list = []
-    // Map the val of the assembly objects to the val of the seq file objects
-    def assembly_val_to_file_val_map = [:]
-    for (i = 0; i <items_list.size(); i+=2) {
-        for (j = 0; j <items_list.size(); j+=2) {
-            if(items_list[j].startsWith(items_list[i]) && items_list[i] != items_list[j]){
-                // Then items_list[i] is substring of items_list[j]
-                // Then items_list[i] is assembly related to reads items_list[j]
-                if(assembly_val_to_file_val_map.containsKey(items_list[i])){
-                    // Then we already have one of the reads mapped to items_list[i]
-                    // So add this second one to the list
-                    current_read_val_list = assembly_val_to_file_val_map.get(items_list[i])
-                    new_read_val_list = current_read_val_list + items_list[j]
-                    assembly_val_to_file_val_map[items_list[i]] = new_read_val_list
-                }else{
-                    // Then we don't have either of the reads mapped to the assembly val yet
-                    assembly_val_to_file_val_map[items_list[i]] = [items_list[j]]
-                }
-            }
-        }
-    }
-    
-    // Map each val object to its list of files
-    def val_to_files_list_map = [:]
-    for (i = 0; i <items_list.size(); i+=2) {
-        
-        val_to_files_list_map.put(items_list[i], items_list[i+1])
-    }
-
-    // Finally populate the return_list according to the mappings we have made
-    // We want the strucutre to be tuples (2 items) with a tuple for every read set.
-    // First item is the val of the read set
-    // Second item is a list containing the R1, R2, followed by assembly files in that order
-    assembly_val_to_file_val_map.each { assembly_key, read_val_list ->
-        read_val_list.each{read_name ->
-            def tup = tuple(read_name, val_to_files_list_map[read_name] + val_to_files_list_map[assembly_key])
-            return_list << tuple([read_name, assembly_key], val_to_files_list_map[read_name], val_to_files_list_map[assembly_key])
-        }
-    }
-    return return_list
-
-}
+    tuple val(pair_ids), file(reads), file(assembly_db) from ch_bowtie2_mapping_stats_indexed_assembly.mix(ch_bowtie2_mapping_stats_reads).collect().flatMap{ items_list -> pair_read_to_assembly(items_list)}
 
     output:
     file("${pair_ids[0]}_align_stats.txt")
@@ -507,29 +474,29 @@ process bowtie2_mapping_stats_reads{
     """
 }
 
+// ch_rsem_assemblies.mix(ch_rsem_reads).collect().flatMap{ items_list -> pair_read_to_assembly(items_list)}.view()
 // // Finally let's get the Ex90N50 and Ex90 Gene Count
-// process rsem{
-//     cache 'lenient'
-//     tag "$pair_id"
-//     cpus params.rsem_threads
-//     container 'trinityrnaseq/trinityrnaseq:latest'
-//     containerOptions '-u $(id -u):$(id -g)'
+process rsem{
+    cache 'lenient'
+    tag "$pair_id"
+    cpus params.rsem_threads
+    container 'trinityrnaseq/trinityrnaseq:latest'
+    containerOptions '-u $(id -u):$(id -g)'
 
-//     input:
-//     tuple val(pair_id), file(assembly), file(reads) from ch_rsem_assemblies.join(ch_rsem_reads)
+    input:
+    tuple val(pair_ids), file(reads), file(assembly) from ch_rsem_assemblies.mix(ch_rsem_reads).collect().flatMap{ items_list -> pair_read_to_assembly(items_list)}
 
-//     output:
-//     tuple file("${pair_id}.RSEM.isoforms.results"), file("${pair_id}.RSEM.genes.results")
+    output:
+    tuple file("${pair_ids[0]}.RSEM.isoforms.results"), file("${pair_ids[0]}.RSEM.genes.results")
 
-//     script:
-//     """
-//     /usr/local/bin/trinityrnaseq/util/align_and_estimate_abundance.pl --transcripts $assembly \\
-//     --left ${reads[0]} --right ${reads[1]} \\
-//     --seqType fq --est_method RSEM --output_dir out_dir --aln_method bowtie2 --SS_lib_type RF \\
-//     --thread_count ${task.cpus} --trinity_mode --prep_reference
-//     mv out_dir/RSEM.isoforms.results ${pair_id}.RSEM.isoforms.results
-//     mv out_dir/RSEM.genes.results ${pair_id}.RSEM.genes.results
-//     """
-// }
-
+    script:
+    """
+    /usr/local/bin/trinityrnaseq/util/align_and_estimate_abundance.pl --transcripts ${assembly} \\
+    --left ${reads[0]} --right ${reads[1]} \\
+    --seqType fq --est_method RSEM --output_dir out_dir --aln_method bowtie2 --SS_lib_type RF \\
+    --thread_count ${task.cpus} --trinity_mode --prep_reference
+    mv out_dir/RSEM.isoforms.results ${pair_ids[0]}.RSEM.isoforms.results
+    mv out_dir/RSEM.genes.results ${pair_ids[0]}.RSEM.genes.results
+    """
+}
 
