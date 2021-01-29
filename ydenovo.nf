@@ -243,6 +243,7 @@ process mmseq_create_query_dbs{
     containerOptions '-u $(id -u):$(id -g)'
     storeDir mmseqs_read_query_db_store_dir
 
+
     input:
     tuple val(pair_id), file(fastq_file) from ch_mmseq_create_query_dbs.flatMap{[["${it[0]}_1", it[1][0]], ["${it[0]}_2", it[1][1]]]}
 
@@ -293,6 +294,13 @@ process mmseq_create_query_dbs{
 // // https://journals.plos.org/plosone/article?id=10.1371/journal.pone.0232005
 // // Also, spadesrna seems like a smart choice for a second assembler.
 // // Now do the trinity assembly. We want to export the assembly and the gene to transcript map
+
+// 
+// We will make three assemblies
+// channel manipulation below does:
+// 1 - concatenate the sample_ids to only their base e.g. NG-25417_DK_1_lib406032_6953_2 --> NG-25417_DK
+// 2 - There are then 2 identical keys for each sample type which we group with groupTuple
+// 3 - Finally, we join the two lists each containing the two sequencing files from the original key files pairs
 process trinity{
     cache 'lenient'
     tag "$pair_id"
@@ -302,7 +310,7 @@ process trinity{
     storeDir trinity_assembly_publish_dir
 
     input:
-    tuple val(pair_id), file(fastqs) from ch_trinity
+    tuple val(pair_id), file(fastqs) from ch_trinity.map{ key, files -> tuple( key[0..10], files ) }.groupTuple().map{key, files -> tuple(key, files[0] + files[1])}
 
     output:
     tuple val(pair_id), file("${pair_id}.Trinity.fasta") into ch_trinity_stats,ch_busco,ch_assembly_bowtie_db,ch_rsem_assemblies
@@ -311,14 +319,14 @@ process trinity{
     script:
     // NB that the output directory for each trinity assembly must have 'trinity' in it.
     """
-    Trinity --left ${fastqs[0]} --right ${fastqs[1]} --seqType fq --max_memory 150G --CPU ${task.cpus} \\
+    Trinity --left ${fastqs[0]},${fastqs[2]} --right ${fastqs[1]},${fastqs[3]} --seqType fq --max_memory 150G --CPU ${task.cpus} \\
     --min_contig_length 250 --output trinity --full_cleanup  --SS_lib_type RF
     mv trinity.Trinity.fasta ${pair_id}.Trinity.fasta
     mv trinity.Trinity.fasta.gene_trans_map ${pair_id}.gene_trans_map
     """
 }
 
-// // TODO first do some basic stats using the Trinity stats package.
+// // // TODO first do some basic stats using the Trinity stats package.
 process trinity_stats{
     cache 'lenient'
     tag "$pair_id"
@@ -336,14 +344,13 @@ process trinity_stats{
     """
     /usr/local/bin/trinityrnaseq/util/TrinityStats.pl $trin_assembly_fasta >& ${pair_id}_trinity_assembly_stats.txt
     """
-
 }
 
-// // busco
+// // // busco
 // process busco{
 //     cache 'lenient'
 //     tag "$pair_id"
-//     container '11cfd93a8245'
+//     container 'ezlabgva/busco:v5.0.0_cv1'
 //     containerOptions '-u $(id -u):$(id -g) -v $(pwd):/busco_wd'
 //     publishDir busco_stats_publish_dir, mode: 'copy', saveAs: {filename -> filename.replaceAll('.txt', "_${pair_id}_.txt")}
 //     stageInMode 'copy'
@@ -354,7 +361,7 @@ process trinity_stats{
 //     tuple val(pair_id), file(trin_assembly_fasta) from ch_trinity_stats
 
 //     output:
-//     file("busco_results/*.txt") into ch_busco_out
+//     file("*.txt") into ch_busco_out
 
 //     script:
 //     """
@@ -364,8 +371,8 @@ process trinity_stats{
 // }
 
 
-// quantify reads mapping back to the assembly
-// first, make indexed bowtie2 db of the assembly
+// // quantify reads mapping back to the assembly
+// // first, make indexed bowtie2 db of the assembly
 process assembly_bowtie_db{
     cache 'lenient'
     tag "$pair_id"
@@ -386,70 +393,143 @@ process assembly_bowtie_db{
     """
 
 }
+// We will mix the two channels, collect them and then work within a map
+// We will look for the vals that are subsets of the other vals and create a map
+// of the val for the assemblies to the reads
+// At the same time we will create will create a map of the val to the reads
+// From this map we can then 
+// ch_bowtie2_mapping_stats_indexed_assembly.mix(ch_bowtie2_mapping_stats_reads).collect().flatMap{ items_list ->
+//     def return_list = []
+//     // Map the val of the assembly objects to the val of the seq file objects
+//     def assembly_val_to_file_val_map = [:]
+//     for (i = 0; i <items_list.size(); i+=2) {
+//         for (j = 0; j <items_list.size(); j+=2) {
+//             if(items_list[j].startsWith(items_list[i]) && items_list[i] != items_list[j]){
+//                 // Then items_list[i] is substring of items_list[j]
+//                 // Then items_list[i] is assembly related to reads items_list[j]
+//                 if(assembly_val_to_file_val_map.containsKey(items_list[i])){
+//                     // Then we already have one of the reads mapped to items_list[i]
+//                     // So add this second one to the list
+//                     current_read_val_list = assembly_val_to_file_val_map.get(items_list[i])
+//                     new_read_val_list = current_read_val_list + items_list[j]
+//                     assembly_val_to_file_val_map[items_list[i]] = new_read_val_list
+//                 }else{
+//                     // Then we don't have either of the reads mapped to the assembly val yet
+//                     assembly_val_to_file_val_map[items_list[i]] = [items_list[j]]
+//                 }
+//             }
+//         }
+//     }
+    
+//     // Map each val object to its list of files
+//     def val_to_files_list_map = [:]
+//     for (i = 0; i <items_list.size(); i+=2) {
+        
+//         val_to_files_list_map.put(items_list[i], items_list[i+1])
+//     }
 
-// ch_bowtie2_mapping_stats_indexed_assembly.join(ch_bowtie2_mapping_stats_reads).view()
+//     // Finally populate the return_list according to the mappings we have made
+//     // We want the strucutre to be tuples (2 items) with a tuple for every read set.
+//     // First item is the val of the read set
+//     // Second item is a list containing the R1, R2, followed by assembly files in that order
+//     assembly_val_to_file_val_map.each { assembly_key, read_val_list ->
+//         read_val_list.each{read_name ->
+//             def tup = tuple(read_name, val_to_files_list_map[read_name] + val_to_files_list_map[assembly_key])
+//             return_list << tuple([read_name,assembly_key], val_to_files_list_map[read_name], val_to_files_list_map[assembly_key])
+//         }
+//     }
+//     return return_list
 
-// second, map the reads back to the bowtie2 indexed assembly db
+// }.view()
+
+// TODO here we need to reassociate each of the assemblies back to its original reads
+// // second, map the reads back to the bowtie2 indexed assembly db
 process bowtie2_mapping_stats_reads{
     cache 'lenient'
-    tag "$pair_id"
+    tag "${pair_ids[0]}"
     publishDir read_mapping_stats_publish_dir, mode: 'copy'
     cpus params.bowtie2_threads
     container 'trinityrnaseq/trinityrnaseq:latest'
     containerOptions '-u $(id -u):$(id -g)'
 
     input:
-    tuple val(pair_id), file(assembly_db), file(reads) from ch_bowtie2_mapping_stats_indexed_assembly.join(ch_bowtie2_mapping_stats_reads)
+    tuple val(pair_ids), file(reads), file(assembly_db) from ch_bowtie2_mapping_stats_indexed_assembly.mix(ch_bowtie2_mapping_stats_reads).collect().flatMap{ items_list ->
+    def return_list = []
+    // Map the val of the assembly objects to the val of the seq file objects
+    def assembly_val_to_file_val_map = [:]
+    for (i = 0; i <items_list.size(); i+=2) {
+        for (j = 0; j <items_list.size(); j+=2) {
+            if(items_list[j].startsWith(items_list[i]) && items_list[i] != items_list[j]){
+                // Then items_list[i] is substring of items_list[j]
+                // Then items_list[i] is assembly related to reads items_list[j]
+                if(assembly_val_to_file_val_map.containsKey(items_list[i])){
+                    // Then we already have one of the reads mapped to items_list[i]
+                    // So add this second one to the list
+                    current_read_val_list = assembly_val_to_file_val_map.get(items_list[i])
+                    new_read_val_list = current_read_val_list + items_list[j]
+                    assembly_val_to_file_val_map[items_list[i]] = new_read_val_list
+                }else{
+                    // Then we don't have either of the reads mapped to the assembly val yet
+                    assembly_val_to_file_val_map[items_list[i]] = [items_list[j]]
+                }
+            }
+        }
+    }
+    
+    // Map each val object to its list of files
+    def val_to_files_list_map = [:]
+    for (i = 0; i <items_list.size(); i+=2) {
+        
+        val_to_files_list_map.put(items_list[i], items_list[i+1])
+    }
+
+    // Finally populate the return_list according to the mappings we have made
+    // We want the strucutre to be tuples (2 items) with a tuple for every read set.
+    // First item is the val of the read set
+    // Second item is a list containing the R1, R2, followed by assembly files in that order
+    assembly_val_to_file_val_map.each { assembly_key, read_val_list ->
+        read_val_list.each{read_name ->
+            def tup = tuple(read_name, val_to_files_list_map[read_name] + val_to_files_list_map[assembly_key])
+            return_list << tuple([read_name, assembly_key], val_to_files_list_map[read_name], val_to_files_list_map[assembly_key])
+        }
+    }
+    return return_list
+
+}
 
     output:
-    file("${pair_id}_align_stats.txt")
+    file("${pair_ids[0]}_align_stats.txt")
 
     script:
     """
-    bowtie2 -p ${task.cpus} -q --no-unal -k 20 -x ${pair_id}_bt_db -1 ${reads[0]} \\
-    -2 ${reads[1]} 2>${pair_id}_align_stats.txt
+    bowtie2 -p ${task.cpus} -q --no-unal -k 20 -x ${pair_ids[1]}_bt_db -1 ${reads[0]} \\
+    -2 ${reads[1]} 2>${pair_ids[0]}_align_stats.txt
     """
 }
 
-// Finally let's get the Ex90N50 and Ex90 Gene Count
-process rsem{
-    cache 'lenient'
-    tag "$pair_id"
-    cpus params.rsem_threads
-    container 'trinityrnaseq/trinityrnaseq:latest'
-    containerOptions '-u $(id -u):$(id -g)'
+// // Finally let's get the Ex90N50 and Ex90 Gene Count
+// process rsem{
+//     cache 'lenient'
+//     tag "$pair_id"
+//     cpus params.rsem_threads
+//     container 'trinityrnaseq/trinityrnaseq:latest'
+//     containerOptions '-u $(id -u):$(id -g)'
 
-    input:
-    tuple val(pair_id), file(assembly), file(reads) from ch_rsem_assemblies.join(ch_rsem_reads)
+//     input:
+//     tuple val(pair_id), file(assembly), file(reads) from ch_rsem_assemblies.join(ch_rsem_reads)
 
-    output:
-    tuple file("${pair_id}.RSEM.isoforms.results"), file("${pair_id}.RSEM.genes.results")
+//     output:
+//     tuple file("${pair_id}.RSEM.isoforms.results"), file("${pair_id}.RSEM.genes.results")
 
-    script:
-    """
-    /usr/local/bin/trinityrnaseq/util/align_and_estimate_abundance.pl --transcripts $assembly \\
-    --left ${reads[0]} --right ${reads[1]} \\
-    --seqType fq --est_method RSEM --output_dir out_dir --aln_method bowtie2 --SS_lib_type RF \\
-    --thread_count ${task.cpus} --trinity_mode --prep_reference
-    mv out_dir/RSEM.isoforms.results ${pair_id}.RSEM.isoforms.results
-    mv out_dir/RSEM.genes.results ${pair_id}.RSEM.genes.results
-    """
-}
-// 
-// TODO as an initial set of quality metrics
-// take a look at the below suggestion from 
-// https://academic.oup.com/gigascience/article/8/5/giz039/5488105
-/*
-On the basis of our observations, we suggest initially using reference-free metrics as provided 
-by the TransRate [42] software. In general, TransRate’s optimal assembly score seems to be a 
-good measure of the quality of an assembly. Assemblies that needed fewer contigs for a comprehensive 
-description of the whole transcriptome also achieved in most cases good TransRate scores (Table S6). 
-However, this score can be calculated only for paired-end RNA-Seq data at the moment.
+//     script:
+//     """
+//     /usr/local/bin/trinityrnaseq/util/align_and_estimate_abundance.pl --transcripts $assembly \\
+//     --left ${reads[0]} --right ${reads[1]} \\
+//     --seqType fq --est_method RSEM --output_dir out_dir --aln_method bowtie2 --SS_lib_type RF \\
+//     --thread_count ${task.cpus} --trinity_mode --prep_reference
+//     mv out_dir/RSEM.isoforms.results ${pair_id}.RSEM.isoforms.results
+//     mv out_dir/RSEM.genes.results ${pair_id}.RSEM.genes.results
+//     """
+// }
 
-If biological/reference-based metrics should be included, the 95%-assembled isoforms statistics calculated 
-by rnaQUAST [39], as well as the scores calculated by BUSCO [43,42] and the number of fully reconstructed 
-protein-coding transcripts, are good metrics for the evaluation of the best assembly results.
-
-
-*/
 
