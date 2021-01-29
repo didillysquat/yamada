@@ -3,7 +3,7 @@
 // 1.	N. agnita (free-living diatom, two bio-duplicates NA1 and 2)
 // 2.	D. capensis (dinotom containing N. agnita, two bio-duplicates DC1 and 2);
 // 3.	D. kwazulunatalensis (dinotom containing another diatom, two bio-duplicates DK1 and 2).
-
+// TODO consider working with two sets of vals that represent the assembly id and the sample id.
 params.raw_reads_dir = "/home/humebc/projects/20201217_yamada/raw_seq_files"
 params.output_dir = "${workflow.launchDir}/outputs"
 bin_dir = "${workflow.launchDir}/bin"
@@ -30,6 +30,7 @@ if (params.subsample){
     busco_stats_publish_dir = [params.output_dir, "busco_stats_sub_${params.subsample_depth}"].join(File.separator)
     assembly_bowtie2_indexed_db_storeDir = [params.output_dir, "assembly_bowtie2_indexed_dbs_sub_${params.subsample_depth}"].join(File.separator)
     read_mapping_stats_publish_dir = [params.output_dir, "read_mapping_stats_sub_${params.subsample_depth}"].join(File.separator)
+    expression_quantification_rsem_publish_dir = [params.output_dir, "expression_quantification_rsem_sub_${params.subsample_depth}"].join(File.separator)
 }else{
     fastqc_pre_trim_publish_dir = [params.output_dir, "fastqc_pre_trim"].join(File.separator)
     fastqc_post_trim_publish_dir = [params.output_dir, "fastqc_post_trim"].join(File.separator)
@@ -41,6 +42,7 @@ if (params.subsample){
     busco_stats_publish_dir = [params.output_dir, "busco_stats"].join(File.separator)
     assembly_bowtie2_indexed_db_storeDir = [params.output_dir, "assembly_bowtie2_indexed_dbs"].join(File.separator)
     read_mapping_stats_publish_dir = [params.output_dir, "read_mapping_stats"].join(File.separator)
+    expression_quantification_rsem_publish_dir = [params.output_dir, "expression_quantification_rsem"].join(File.separator)
 }
 
 // DB paths
@@ -365,7 +367,7 @@ process trinity{
 
     output:
     tuple val(pair_id), file("${pair_id}.Trinity.fasta") into ch_trinity_stats,ch_busco,ch_assembly_bowtie_db,ch_rsem_assemblies
-    tuple val(pair_id), file("${pair_id}.gene_trans_map") into ch_trin_gene_trans_map
+    tuple val(pair_id), file("${pair_id}.gene_trans_map") into ch_abund_to_matrix_gene_map
 
     script:
     // NB that the output directory for each trinity assembly must have 'trinity' in it.
@@ -453,6 +455,18 @@ process assembly_bowtie_db{
 
 // TODO here we need to reassociate each of the assemblies back to its original reads
 // second, map the reads back to the bowtie2 indexed assembly db
+/* error produced
+Cannot execute null+/home/humebc/projects/20201217_yamada/nf_pipeline/outputs/trinity_assembly_sub_10000/NG-25417_DK.Trinity.fasta
+
+ -- Check script 'ydenovo.nf' at line: 102 or see '.nextflow.log' file for more details
+Error executing process > 'bowtie2_mapping_stats_reads (NG-25417_DK)'
+
+Caused by:
+  Process `bowtie2_mapping_stats_reads` input file name collision -- There are multiple input files for each of the following file names: NG-25417_DK_bt_db.2.bt2, NG-25417_DK_bt_db.1.bt2, NG-25417_DK_bt_db.3.bt2, NG-25417_DK_bt_db.4.bt2, NG-25417_DK_bt_db.rev.1.bt2, NG-25417_DK_bt_db.rev.2.bt2
+
+
+Tip: view the complete command output by changing to the process work dir and entering the command `cat .command.out`
+*/
 process bowtie2_mapping_stats_reads{
     cache 'lenient'
     tag "${pair_ids[0]}"
@@ -482,12 +496,14 @@ process rsem{
     cpus params.rsem_threads
     container 'trinityrnaseq/trinityrnaseq:latest'
     containerOptions '-u $(id -u):$(id -g)'
+    publishDir expression_quantification_rsem_publish_dir
 
     input:
     tuple val(pair_ids), file(reads), file(assembly) from ch_rsem_assemblies.mix(ch_rsem_reads).collect().flatMap{ items_list -> pair_read_to_assembly(items_list)}
 
     output:
-    tuple file("${pair_ids[0]}.RSEM.isoforms.results"), file("${pair_ids[0]}.RSEM.genes.results")
+    tuple val("${pair_ids[1]}"), file("${pair_ids[0]}.RSEM.isoforms.results") into ch_abund_to_matrix_results
+    tuple val("${pair_ids[1]}"), file("${pair_ids[0]}.RSEM.genes.results") into ch_abund_to_matrix_gen_results_out
 
     script:
     """
@@ -497,6 +513,31 @@ process rsem{
     --thread_count ${task.cpus} --trinity_mode --prep_reference
     mv out_dir/RSEM.isoforms.results ${pair_ids[0]}.RSEM.isoforms.results
     mv out_dir/RSEM.genes.results ${pair_ids[0]}.RSEM.genes.results
+    """
+}
+
+// TODO consider working with two sets of vals that represent the assembly id and the sample id.
+// TODO for the next step we need to work per assembly again
+// We will need the gene map and we will need the results from the above process
+process abund_to_matrix{
+    cache 'lenient'
+    tag "$assembly_id"
+    container 'trinityrnaseq/trinityrnaseq:latest'
+    containerOptions '-u $(id -u):$(id -g)'
+    publishDir expression_quantification_rsem_publish_dir
+
+    input:
+    tuple val(assembly_id), file(abund_results), file(gene_map) from ch_abund_to_matrix_results.groupTuple().join(ch_abund_to_matrix_gene_map)
+
+    output:
+    tuple val(assembly_id), file("${assembly_id}.RSEM.isoform.counts.matrix"), file("${assembly_id}.RSEM.isoform.TPM.not_cross_norm"), file("${assembly_id}.RSEM.isoform.TMM.EXPR.matrix") into ch_abund_to_matrix_out_out
+
+    script:
+    """
+    /usr/local/bin/trinityrnaseq/util/abundance_estimates_to_matrix.pl --est_method RSEM --gene_trans_map ${gene_map} --out_prefix RSEM ${abund_results[0]} ${abund_results[1]}
+    mv RSEM.isoform.counts.matrix ${assembly_id}.RSEM.isoform.counts.matrix
+    mv RSEM.isoform.TPM.not_cross_norm ${assembly_id}.RSEM.isoform.TPM.not_cross_norm
+    mv RSEM.isoform.TMM.EXPR.matrix ${assembly_id}.RSEM.isoform.TMM.EXPR.matrix
     """
 }
 
