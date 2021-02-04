@@ -1,18 +1,12 @@
 #!/usr/bin/env nextflow
 
 // TODO consider working with two sets of vals that represent the assembly id and the sample id.
-params.raw_reads_dir = "/home/humebc/projects/20201217_yamada/raw_seq_files"
+
 bin_dir = "${workflow.launchDir}/bin"
 launch_dir = "${workflow.launchDir}"
 tru_seq_pe_fasta_path = "${workflow.launchDir}/TruSeq3-PE.fa"
 
-params.subsample = false
-params.subsample_depth = 10000
 
-// Evalue for taxonomic analyses
-// NB there is currently a bug in mmseqs where by they are using a FLOAT to store
-// the evalue number. As such the eval will break if you go much above 1e-35.
-params.tax_evalue = '1e-35'
 // Publish dirs
 // TODO consider making the differentiatl publishDir via the saveAs option of publishDir
 // TODO put all of the subsampled outputs into a separate folder to prevent having to clean up
@@ -49,10 +43,8 @@ if (params.subsample){
 
 // DB paths
 // For the docker mounting we need the directory that contains the SILVA database
-params.mmseqs_nt_path = '/home/humebc/nt/nt.fnaDB'
 File nt_file = new File(params.mmseqs_nt_path);
 nt_db_dir = nt_file.getParent();
-params.path_to_bowtie2_silva_db = '/home/humebc/silva/SILVA_SSUParc_LSUParc_tax'
 File b2_file = new File(params.path_to_bowtie2_silva_db);
 bowtie2_silva_db_dir = b2_file.getParent();
 
