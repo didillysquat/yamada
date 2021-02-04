@@ -1,15 +1,10 @@
 #!/usr/bin/env nextflow
-// pipeline for doing the denovo assembly of yamadas 6 transciptomes generated from:
-// 1.	N. agnita (free-living diatom, two bio-duplicates NA1 and 2)
-// 2.	D. capensis (dinotom containing N. agnita, two bio-duplicates DC1 and 2);
-// 3.	D. kwazulunatalensis (dinotom containing another diatom, two bio-duplicates DK1 and 2).
+
 // TODO consider working with two sets of vals that represent the assembly id and the sample id.
 params.raw_reads_dir = "/home/humebc/projects/20201217_yamada/raw_seq_files"
-params.output_dir = "${workflow.launchDir}/outputs"
 bin_dir = "${workflow.launchDir}/bin"
 launch_dir = "${workflow.launchDir}"
 tru_seq_pe_fasta_path = "${workflow.launchDir}/TruSeq3-PE.fa"
-
 
 params.subsample = false
 params.subsample_depth = 10000
@@ -23,11 +18,13 @@ params.tax_evalue = '1e-35'
 // TODO put all of the subsampled outputs into a separate folder to prevent having to clean up
 // the main output folder prior to delivery
 if (params.subsample){
+    params.output_dir = "${workflow.launchDir}/outputs_sub_sampled/"
     fastqc_pre_trim_publish_dir = [params.output_dir, "fastqc_pre_trim_sub_${params.subsample_depth}"].join(File.separator)
     fastqc_post_trim_publish_dir = [params.output_dir, "fastqc_post_trim_sub_${params.subsample_depth}"].join(File.separator)
     fastqc_post_correct_publish_dir = [params.output_dir, "fastqc_post_correct_sub_${params.subsample_depth}"].join(File.separator)
     mmseqs_read_query_db_store_dir = [params.output_dir, "mmseqs_read_query_dbs_sub_${params.subsample_depth}"].join(File.separator)
     mmseqs_taxonomy_publish_dir = [params.output_dir, "mmseqs_taxonomy_sub_${params.subsample_depth}_${params.tax_evalue}"].join(File.separator)
+    cleaned_reads_publish_dir = [params.output_dir, "cleaned_reads_sub_${params.subsample_depth}"].join(File.separator)
     trinity_assembly_publish_dir = [params.output_dir, "trinity_assembly_sub_${params.subsample_depth}"].join(File.separator)
     trinity_stats_publish_dir = [params.output_dir, "trinity_basic_stats_sub_${params.subsample_depth}"].join(File.separator)
     busco_stats_publish_dir = [params.output_dir, "busco_stats_sub_${params.subsample_depth}"].join(File.separator)
@@ -35,11 +32,13 @@ if (params.subsample){
     read_mapping_stats_publish_dir = [params.output_dir, "read_mapping_stats_sub_${params.subsample_depth}"].join(File.separator)
     expression_quantification_rsem_publish_dir = [params.output_dir, "expression_quantification_rsem_sub_${params.subsample_depth}"].join(File.separator)
 }else{
+    params.output_dir = "${workflow.launchDir}/outputs"
     fastqc_pre_trim_publish_dir = [params.output_dir, "fastqc_pre_trim"].join(File.separator)
     fastqc_post_trim_publish_dir = [params.output_dir, "fastqc_post_trim"].join(File.separator)
     fastqc_post_correct_publish_dir = [params.output_dir, "fastqc_post_correct"].join(File.separator)
     mmseqs_read_query_db_store_dir = [params.output_dir, "mmseqs_read_query_dbs"].join(File.separator)
     mmseqs_taxonomy_publish_dir = [params.output_dir, "mmseqs_taxonomy_${params.tax_evalue}"].join(File.separator)
+    cleaned_reads_publish_dir = [params.output_dir, "cleaned_reads"].join(File.separator)
     trinity_assembly_publish_dir = [params.output_dir, "trinity_assembly"].join(File.separator)
     trinity_stats_publish_dir = [params.output_dir, "trinity_basic_stats"].join(File.separator)
     busco_stats_publish_dir = [params.output_dir, "busco_stats"].join(File.separator)
@@ -61,30 +60,15 @@ bowtie2_silva_db_dir = b2_file.getParent();
 params.trimmomatic_threads = 50
 params.rcorrector_threads = 50
 params.trinity_threads = 50
-params.mmseqs_threads = 100
+params.mmseqs_threads = 20
 params.busco_threads = 50
 params.bowtie2_threads = 50
 params.rsem_threads = 50
-
-// Util methods
-// Returns a tuple with three elements
-// 1 a list of 2 val items. 0 is the read sample_id, 1 is the assembly sample_id
-// 2 a list of 2 file items. The R1 and R2 reads in that order
-// 3 a list of the file items originally associated with the assembly sample_id
-// for the indexed assembly db this will be the db index objects in a list
-// for the assembly itself this will be the fasta assembly.
-// We think that multiprocessing was causing issues here.
 
 /* 
 If subsample, create a channel that will pass into the subsampling process and then pass the subsampled
 files into the trimming and fastqc
 if not subsample, then create channel directly from the raw sequencing files
-
-
-container 'biocontainers/seqtk:v1.3-1-deb_cv1'
-containerOptions '-u $(id -u):$(id -g)'
-conda "envs/seqtk.yaml"
-storeDir "${params.output_dir}/${params.subsample_depth}_subsampled_reads"
 */
 if (params.subsample){
     Channel.fromFilePairs("${params.raw_reads_dir}/*_{1,2}.fastq.gz").set{ch_subsample}
@@ -93,7 +77,7 @@ if (params.subsample){
         tag "${pair_id}"
         container 'biocontainers/seqtk:v1.3-1-deb_cv1'
         containerOptions '-u $(id -u):$(id -g)'
-        publishDir "${params.output_dir}/${params.subsample_depth}_subsampled_reads", mode: 'copy'
+        publishDir "${params.output_dir}/${params.subsample_depth}_subsampled_reads", mode: 'copy', overwrite: true
         
         input:
         tuple val(pair_id), file(reads) from ch_subsample
@@ -118,19 +102,18 @@ process fastqc_pre_trim{
     tag "${fastq_file}"
     container 'trinityrnaseq/trinityrnaseq:latest'
     containerOptions '-u $(id -u):$(id -g)'
-    publishDir fastqc_pre_trim_publish_dir, mode: 'copy'
-    storeDir fastqc_pre_trim_publish_dir
+    publishDir fastqc_pre_trim_publish_dir, mode: 'copy', overwrite: true
 
     input:
     tuple val(pair_id), file(fastq_file) from ch_fastqc_pre_trim.flatMap{[["${it[0]}_1", it[1][0]], ["${it[0]}_2", it[1][1]]]}
 
     output:
-    file "${pair_id}.fastqc.html" into ch_fastqc_pre_trim_output
+    file "${pair_id}.pre_trim.fastqc.html" into ch_fastqc_pre_trim_output
 
     script:
     """
     fastqc -o . $fastq_file
-    mv *.html ${pair_id}.fastqc.html
+    mv *.html ${pair_id}.pre_trim.fastqc.html
     """
 }
 
@@ -166,19 +149,18 @@ process fastqc_post_trim{
     tag "${fastq_file}"
     container 'trinityrnaseq/trinityrnaseq:latest'
     containerOptions '-u $(id -u):$(id -g)'
-    publishDir fastqc_post_trim_publish_dir, mode: 'copy'
-    storeDir fastqc_post_trim_publish_dir
+    publishDir fastqc_post_trim_publish_dir, mode: 'copy', overwrite: true
 
     input:
     tuple val(pair_id), file(fastq_file) from ch_fastqc_post_trim.flatMap{[["${it[0]}_1", it[1][0]], ["${it[0]}_2", it[1][1]]]}
 
     output:
-    file "${pair_id}.fastqc.html" into ch_fastqc_post_trim_output
+    file "${pair_id}.post_trim.fastqc.html" into ch_fastqc_post_trim_output
 
     script:
     """
     fastqc -o . $fastq_file
-    mv *.html ${pair_id}.fastqc.html
+    mv *.html ${pair_id}.post_trim.fastqc.html
     """
 }
 
@@ -213,12 +195,13 @@ process bowtie2_silva_mapping{
     container 'biocontainers/bowtie2:v2.4.1_cv1'
     containerOptions "-u \$(id -u):\$(id -g) -v ${bowtie2_silva_db_dir}:${bowtie2_silva_db_dir}"
     cpus params.bowtie2_threads
+    publishDir cleaned_reads_publish_dir, mode: 'copy', overwrite: true
 
     input:
     tuple val(pair_id), file(fastqs) from ch_bowtie2_silva_mapping
 
     output:
-    tuple val(pair_id), file("${pair_id}_paired_unaligned_{R1,R2}.fq.gz") into ch_trinity,ch_fastqc_post_correct,ch_mmseq_create_query_dbs,ch_bowtie2_mapping_stats_reads,ch_rsem_reads
+    tuple val(pair_id), file("${pair_id}_paired_unaligned_{R1,R2}.fq.gz") into ch_trinity,ch_fastqc_post_correct,ch_sub_for_tax,ch_bowtie2_mapping_stats_reads,ch_rsem_reads
 
     script:
     metric_file = "${pair_id}.bowtie_metrics"
@@ -236,39 +219,78 @@ process fastqc_post_correct{
     tag "${fastq_file}"
     container 'trinityrnaseq/trinityrnaseq:latest'
     containerOptions '-u $(id -u):$(id -g)'
-    publishDir fastqc_post_correct_publish_dir, mode: 'copy'
-    storeDir fastqc_post_correct_publish_dir
+    publishDir fastqc_post_correct_publish_dir, mode: 'copy', overwrite: true
 
     input:
     tuple val(pair_id), file(fastq_file) from ch_fastqc_post_correct.flatMap{[["${it[0]}_1", it[1][0]], ["${it[0]}_2", it[1][1]]]}
 
     output:
-    file "${pair_id}.fastqc.html" into ch_fastqc_post_correct_output
+    file "${pair_id}.post_correct.fastqc.html" into ch_fastqc_post_correct_output
 
     script:
     """
     fastqc -o . $fastq_file
-    mv *.html ${pair_id}.fastqc.html
+    mv *.html ${pair_id}.post_correct.fastqc.html
     """
 }
-// TODO we need to sub sample down to something sensible like 10000 or 100000 before we run the taxonomy
-// Else the file sizes get ridiculous and we won't be able to incorporate a sensitive search
-// /* At this point we want to implement some taxonomic checks to see that we are working
-//    with the orgnisms that we expect
-//    An mmseqs taxonomy database has been create as per section "Taxonomy assignment" of:
-//    https://mmseqs.com/latest/userguide.pdf
-//    We will run an mmseqs query against this database for each of the seq files
-//    We will break this up into the following processes
-//    1 - mmseqs creatdb --> queryDB
-//    2 - mmseqs taxonomy --> taxonomyResult
-//         We will limit matches to very confident matches with evalues below 1e-50 
-//         per http://www.metagenomics.wiki/tools/blast/evalue#:~:text=Blast%20hits%20with%20an%20E,good%20hit%20for%20homology%20matches.
-//    3 - mmseqs createtsv --> taxonomyResult.tsv
-//    3 - mmseqs taxonomyreport --> taxonomyResult_report (--report-mode 1 can be used)
-//         We will produce the standard taxonomyResult_report and the html krona report.    
-//    We will want to process on a per readfile basis
-//    see if we can explicitly code in the files
-// */
+
+// If not already subsampled or if the subsample is greater than 10000
+// subsample before running the taxonomy
+if (!params.subsample || params.subsample_depth > 10000){
+    process sub_for_tax{
+        tag "${pair_id}"
+        container 'biocontainers/seqtk:v1.3-1-deb_cv1'
+        containerOptions '-u $(id -u):$(id -g)'
+        
+        input:
+        tuple val(pair_id), file(reads) from ch_sub_for_tax
+
+        output:
+        tuple val("${pair_id}"), file("${pair_id}_sub_10000*.fq.gz") into ch_mmseq_create_query_dbs
+
+        script:
+        read_out_one = reads[0].getName().replaceAll("${pair_id}", "${pair_id}_sub_10000")
+        read_out_two = reads[1].getName().replaceAll("${pair_id}", "${pair_id}_sub_10000")
+        
+        """
+        seqtk sample -s100 ${reads[0]} 10000 | gzip > ${read_out_one}
+        seqtk sample -s100 ${reads[1]} 10000 | gzip > ${read_out_two}
+        """
+    }
+}else{
+    // No script. This merely redirects the channel into a new channel with no processing
+    process no_sub_for_tax{
+        cache 'lenient'
+        tag "$fastq_file"
+
+        input:
+        tuple val(pair_id), file(fastq_file) from ch_sub_for_tax
+
+        output:
+        tuple val(pair_id), file(fastq_file) into ch_mmseq_create_query_dbs
+
+        script:
+        """
+        echo redirecting
+        """
+    }
+}
+// // /* At this point we want to implement some taxonomic checks to see that we are working
+// //    with the orgnisms that we expect
+// //    An mmseqs taxonomy database has been create as per section "Taxonomy assignment" of:
+// //    https://mmseqs.com/latest/userguide.pdf
+// //    We will run an mmseqs query against this database for each of the seq files
+// //    We will break this up into the following processes
+// //    1 - mmseqs creatdb --> queryDB
+// //    2 - mmseqs taxonomy --> taxonomyResult
+// //         We will limit matches to very confident matches with evalues below 1e-50 
+// //         per http://www.metagenomics.wiki/tools/blast/evalue#:~:text=Blast%20hits%20with%20an%20E,good%20hit%20for%20homology%20matches.
+// //    3 - mmseqs createtsv --> taxonomyResult.tsv
+// //    3 - mmseqs taxonomyreport --> taxonomyResult_report (--report-mode 1 can be used)
+// //         We will produce the standard taxonomyResult_report and the html krona report.    
+// //    We will want to process on a per readfile basis
+// //    see if we can explicitly code in the files
+// // */
 process mmseq_create_query_dbs{
     cache 'lenient'
     tag "$fastq_file"
@@ -290,58 +312,58 @@ process mmseq_create_query_dbs{
 
 // // NB there is currently a bug in mmseqs where by they are using a FLOAT to store
 // // the evalue number. As such the eval will break if you go much above 1e-35.
-// mmseqs2 seems to be come extremely slow when multiple version of mmseqs are fun
-// we will set maxForks to 1 to make sure that these run sequentially
-// process mmseq_taxonomy{
-//     cache 'lenient'
-//     tag "${db_files[0]}"
-//     container 'soedinglab/mmseqs2:latest'
-//     containerOptions "-u \$(id -u):\$(id -g) -v ${nt_db_dir}:${nt_db_dir}"
-//     cpus params.mmseqs_threads
-//     publishDir mmseqs_taxonomy_publish_dir, mode: 'copy'
-//     storeDir mmseqs_taxonomy_publish_dir
-//     maxForks 1
 
-//     input:
-//     tuple val(pair_id), file(db_files) from ch_mmseq_taxonomy
+// // of this on run time.
+// // https://github.com/soedinglab/MMseqs2
+process mmseq_taxonomy{
+    cache 'lenient'
+    tag "${db_files[0]}"
+    container 'soedinglab/mmseqs2:latest'
+    containerOptions "-u \$(id -u):\$(id -g) -v ${nt_db_dir}:${nt_db_dir}"
+    cpus params.mmseqs_threads
+    publishDir mmseqs_taxonomy_publish_dir, mode: 'copy', overwrite: true
+    maxForks 1
 
-//     output:
-//     tuple file("${pair_id}.taxonomyResult.tsv"),\
-//     file("${pair_id}.taxonomyResult_report"),\
-//     file("${pair_id}.report.html") into ch_mmseq_taxonomy_out
+    input:
+    tuple val(pair_id), file(db_files) from ch_mmseq_taxonomy
 
-//     script:
-//     output_tsv = "${pair_id}.taxonomyResult.tsv"
-//     output_report = "${pair_id}.taxonomyResult_report"
-//     output_html = "${pair_id}.report.html"
-//     """
-//     mmseqs taxonomy  ${pair_id}.queryDB ${params.mmseqs_nt_path} taxonomyResult tmp --threads ${task.cpus} -e ${params.tax_evalue}
-//     mmseqs createtsv ${pair_id}.queryDB taxonomyResult $output_tsv
-//     mmseqs taxonomyreport ${params.mmseqs_nt_path} taxonomyResult $output_report
-//     mmseqs taxonomyreport ${params.mmseqs_nt_path} taxonomyResult $output_html --report-mode 1
-//     rm -r tmp
-//     """
-// }
+    output:
+    tuple file("${pair_id}.taxonomyResult.tsv"),\
+    file("${pair_id}.taxonomyResult_report"),\
+    file("${pair_id}.report.html") into ch_mmseq_taxonomy_out
 
-// // //TODO do two kmer sizes for trinity. Check what the default is but look at
-// // // possibly using 25 and 32 based on
-// // // https://journals.plos.org/plosone/article?id=10.1371/journal.pone.0232005
-// // // Also, spadesrna seems like a smart choice for a second assembler.
-// // // Now do the trinity assembly. We want to export the assembly and the gene to transcript map
+    script:
+    output_tsv = "${pair_id}.taxonomyResult.tsv"
+    output_report = "${pair_id}.taxonomyResult_report"
+    output_html = "${pair_id}.report.html"
+    """
+    mmseqs taxonomy  ${pair_id}.queryDB ${params.mmseqs_nt_path} taxonomyResult tmp --threads ${task.cpus} -e ${params.tax_evalue} -s 7.0
+    mmseqs createtsv ${pair_id}.queryDB taxonomyResult $output_tsv
+    mmseqs taxonomyreport ${params.mmseqs_nt_path} taxonomyResult $output_report
+    mmseqs taxonomyreport ${params.mmseqs_nt_path} taxonomyResult $output_html --report-mode 1
+    rm -r tmp
+    """
+}
 
-// // 
-// // We will make three assemblies
+// // FUTURE do two kmer sizes for trinity. Check what the default is but look at
+// // possibly using 25 and 32 based on
+// // https://journals.plos.org/plosone/article?id=10.1371/journal.pone.0232005
+// // Also, spadesrna seems like a smart choice for a second assembler.
+// // Now do the trinity assembly. We want to export the assembly and the gene to transcript map
+
+
 // // channel manipulation below does:
 // // 1 - concatenate the sample_ids to only their base e.g. NG-25417_DK_1_lib406032_6953_2 --> NG-25417_DK
 // // 2 - There are then 2 identical keys for each sample type which we group with groupTuple
 // // 3 - Finally, we join the two lists each containing the two sequencing files from the original key files pairs
+// // https://github.com/trinityrnaseq/trinityrnaseq/wiki
 process trinity{
     cache 'lenient'
     tag "$pair_id"
     container 'trinityrnaseq/trinityrnaseq:latest'
     containerOptions '-u $(id -u):$(id -g)'
     cpus params.trinity_threads
-    publishDir trinity_assembly_publish_dir, mode: 'copy'
+    publishDir trinity_assembly_publish_dir, mode: 'copy', overwrite: true
 
     input:
     tuple val(pair_id), file(fastqs) from ch_trinity.map{ key, files -> tuple( key[0..10], files ) }.groupTuple().map{key, files -> tuple(key, files[0] + files[1])}
@@ -360,13 +382,13 @@ process trinity{
     """
 }
 
-// first do some basic stats using the Trinity stats package.
+// // first do some basic stats using the Trinity stats package.
 process trinity_stats{
     cache 'lenient'
     tag "$pair_id"
     container 'trinityrnaseq/trinityrnaseq:latest'
     containerOptions '-u $(id -u):$(id -g)'
-    publishDir trinity_stats_publish_dir, mode: 'copy'
+    publishDir trinity_stats_publish_dir, mode: 'copy', overwrite: true
 
     input:
     tuple val(pair_id), file(trin_assembly_fasta) from ch_busco
@@ -381,15 +403,13 @@ process trinity_stats{
 }
 
 // busco
-// TODO run specifically against alveolate, strapmenopile and general eukaryote.
-// TODO test if it is possible to run against multiple lineages at once
-// TODO clean up any extra files that are present. Especially the downloads file.
+// https://busco.ezlab.org/busco_userguide.html
 process busco{
     cache 'lenient'
     tag "$pair_id"
     container 'ezlabgva/busco:v5.0.0_cv1'
     containerOptions '-u $(id -u):$(id -g) -v $(pwd):/busco_wd'
-    publishDir busco_stats_publish_dir, mode: 'copy', saveAs: {filename -> filename.replaceAll('.txt', "_${pair_id}_.txt")}
+    publishDir busco_stats_publish_dir, mode: 'copy', saveAs: {filename -> filename.replaceAll('.txt', "_${pair_id}_.txt")}, overwrite: true
     errorStrategy 'ignore'
     cpus params.busco_threads
 
@@ -397,12 +417,17 @@ process busco{
     tuple val(pair_id), file(trin_assembly_fasta) from ch_trinity_stats
 
     output:
-    file("*.txt") into ch_busco_out
+    tuple file("*eukaryota_odb10*.txt"), file("*alveolata_odb10*.txt"), file("*stramenopiles_odb10*.txt") into ch_busco_out
 
     script:
     """
-    busco -i $trin_assembly_fasta -o busco_results -m transcriptome --auto-lineage-euk -c ${task.cpus} -f
-    mv busco_results/*.txt .
+    busco -i $trin_assembly_fasta -o busco_results -m transcriptome -l eukaryota_odb10 -c ${task.cpus} -f
+    mv busco_results/*eukaryota_odb10*.txt .
+    busco -i $trin_assembly_fasta -o busco_results -m transcriptome -l alveolata_odb10 -c ${task.cpus} -f
+    mv busco_results/*alveolata_odb10*.txt .
+    busco -i $trin_assembly_fasta -o busco_results -m transcriptome -l stramenopiles_odb10 -c ${task.cpus} -f
+    mv busco_results/*stramenopiles_odb10*.txt .
+    rm -r busco_downloads
     """
 }
 
@@ -415,7 +440,6 @@ process assembly_bowtie_db{
     cpus params.bowtie2_threads
     container 'trinityrnaseq/trinityrnaseq:latest'
     containerOptions '-u $(id -u):$(id -g)'
-    storeDir assembly_bowtie2_indexed_db_storeDir
 
     input:
     tuple val(pair_id), file(trin_assembly_fasta) from ch_assembly_bowtie_db
@@ -432,24 +456,10 @@ process assembly_bowtie_db{
 
 // // Here we need to reassociate each of the assemblies back to its original reads
 // // second, map the reads back to the bowtie2 indexed assembly db
-// /* error produced on one of the runs. Hasn't happened since.
-// Cannot execute null+/home/humebc/projects/20201217_yamada/nf_pipeline/outputs/trinity_assembly_sub_10000/NG-25417_DK.Trinity.fasta
-
-//  -- Check script 'ydenovo.nf' at line: 102 or see '.nextflow.log' file for more details
-// Error executing process > 'bowtie2_mapping_stats_reads (NG-25417_DK)'
-
-// Caused by:
-//   Process `bowtie2_mapping_stats_reads` input file name collision -- There are multiple input files for each of the following file names: NG-25417_DK_bt_db.2.bt2, NG-25417_DK_bt_db.1.bt2, NG-25417_DK_bt_db.3.bt2, NG-25417_DK_bt_db.4.bt2, NG-25417_DK_bt_db.rev.1.bt2, NG-25417_DK_bt_db.rev.2.bt2
-
-
-// Tip: view the complete command output by changing to the process work dir and entering the command `cat .command.out`
-// */
-// ch_bowtie2_mapping_stats_indexed_assembly.mix(ch_bowtie2_mapping_stats_reads).collect().view()
-
 process bowtie2_mapping_stats_reads{
     cache 'lenient'
     tag "${pair_ids[0]}"
-    publishDir read_mapping_stats_publish_dir, mode: 'copy'
+    publishDir read_mapping_stats_publish_dir, mode: 'copy', overwrite: true
     cpus params.bowtie2_threads
     container 'trinityrnaseq/trinityrnaseq:latest'
     containerOptions '-u $(id -u):$(id -g)'
@@ -523,7 +533,7 @@ process rsem{
     cpus params.rsem_threads
     container 'trinityrnaseq/trinityrnaseq:latest'
     containerOptions '-u $(id -u):$(id -g)'
-    publishDir expression_quantification_rsem_publish_dir, mode: 'copy'
+    publishDir expression_quantification_rsem_publish_dir, mode: 'copy', overwrite: true
 
     input:
     tuple val(pair_ids), file(reads), file(assembly) from ch_rsem_assemblies.mix(ch_rsem_reads).collect().flatMap{ items_list -> println "THIS is starting the pair_read_to_assembly"
@@ -597,7 +607,7 @@ process abund_to_matrix{
     tag "$assembly_id"
     container 'trinityrnaseq/trinityrnaseq:latest'
     containerOptions '-u $(id -u):$(id -g)'
-    publishDir expression_quantification_rsem_publish_dir, mode: 'copy'
+    publishDir expression_quantification_rsem_publish_dir, mode: 'copy', overwrite: true
 
     input:
     tuple val(assembly_id), file(abund_results), file(gene_map) from ch_abund_to_matrix_results.groupTuple().join(ch_abund_to_matrix_gene_map)
@@ -622,7 +632,7 @@ process ExN50{
     tag "$assembly_id"
     container 'trinityrnaseq/trinityrnaseq:latest'
     containerOptions '-u $(id -u):$(id -g)'
-    publishDir expression_quantification_rsem_publish_dir, mode: 'copy'
+    publishDir expression_quantification_rsem_publish_dir, mode: 'copy', overwrite: true
 
     input:
     tuple val(assembly_id), file(abund_matrix), file(assembly_fasta) from ch_ExN50_matrix.join(ch_ExN50_assembly)
