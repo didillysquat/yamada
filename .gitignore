@@ -5,3 +5,5 @@ work
 .vscode
 outputs
 nf_trinity_assembly
+busco_downloads
+private_readme.txt

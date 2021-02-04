@@ -1,6 +1,7 @@
 # Yamada et al. 20201
 
 ## Overview
+
 A pipeline for *de novo* transcriptome assembly using Trinity.
 
 [Fastqc](https://www.bioinformatics.babraham.ac.uk/projects/fastqc/) is used to get a QC overview of reads before processing and after processing.
@@ -20,30 +21,48 @@ Assebly evautation statistics are produced using a collection of the perl script
 [busco](https://busco.ezlab.org/) is also used to assess completeness of the assemblies using the eukaryota_odb10, alveolata_odb10 and stramenopiles_odb10 databases.
 
 ## Pipeline requirements
+
 ### Nextflow
+
 To run this nextflow pipeline, [Nextflow](https://www.nextflow.io/) must be installed on your system.
 
 ### Docker
+
 This pipeline uses Docker images/containers. Docker must therefore be installed on your system to run this pipeline. Docker images will automatically be downloaded if they are not found locally.
 
 ### NCBI's nt database with taxonomic annotations setup for MMSeqs
+
 This pipeline runs taxonomic annotations using MMSeqs2 and the NCBI's nt database with taxonomic annotations. Specific setup guidelines are in the section "Create a seqTaxDB from an existing BLAST database" in the MMSeqs2 manual found [here](https://mmseqs.com/latest/userguide.pdf).
 
 ### SILVA LSU and SSU rRNA database bowtie2 indexed
+
 This pipeline screens for rRNA reads and removes them. To do this you will need an MMSeq2 indexed SILVA database that contains the rRNA reads to be screened against. To build this database, concatenate the SILVA_138.1_LSUParc_tax_silva.fasta and SILVA_138.1_SSUParc_tax_silva.fasta files that can be downloaded from [here](https://www.arb-silva.de/no_cache/download/archive/release_138_1/Exports/). Then create the MMSeqs2 database and index.
 
 ## Running the pipeline
+
 The pipeline is launched in the usual way and you will need to either modify the input paramaters in the `nextflow.config` file, or provide them on the command line in the usual way.
-```
+
+```bash
 nextflow run ydenovo.nf
 ```
+
 Or e.g.
-```
+
+```bash
 nextflow run ydenovo.nf --raw_reads_dir </PATH/TO/READ/DIR/>
 ```
+
 The pipeline is currently specific to the squenceing files of the Yamada et al. 2021 project. However, this can be modified to make the pipeline function on a generic set of RNA-seq input files.
 
-N.B. due to a [bug](https://github.com/soedinglab/MMseqs2/issues/399) in MMSeq2, the evalue for taxonomic screening should not be more sensitive than '1e-35' (the current default)
+N.B. due to a [bug](https://github.com/soedinglab/MMseqs2/issues/399) in MMSeq2, the evalue for taxonomic screening should not be more sensitive than '1e-35' (the current default).
+
+### Subsampling
+
+To aid in development and debugging, a subsampling parameter is available. This allows the pipeline to be run on a subsampled verion of your seuqencing files. This greatly speeds up execution of the workflow.
+
+To execute subsampling use `--subsample true`.
+
+To set the subsampling depth use `--subsample_depth 10000`. The default is 10000.
 
 ## Outputs
 
